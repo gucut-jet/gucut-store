@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import {
   RecaptchaVerifier,
   signInWithPhoneNumber,
+  signInWithRedirect,
+  getRedirectResult,
+  GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
   type ConfirmationResult,
@@ -51,9 +54,14 @@ function firebaseErrorToThai(code: string): string {
     case "auth/user-disabled":
       return "บัญชีนี้ถูกระงับการใช้งาน";
     case "auth/network-request-failed":
-      return "การเชื่อมต่อขัด้อง กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่";
+      return "การเชื่อมต่อขัดข้อง กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่";
     case "auth/captcha-check-failed":
       return "ตรวจสอบยืนยันตัวตนไม่สำเร็จ กรุณาลองใหม่อีกครั้ง";
+    case "auth/account-exists-with-different-credential":
+      return "อีเมลนี้ถูกใช้เข้าสู่ระบบด้วยวิธีอื่นแล้ว";
+    case "auth/popup-closed-by-user":
+    case "auth/cancelled-popup-request":
+      return "";
     default:
       return "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง";
   }
@@ -71,6 +79,7 @@ export default function AccountPage() {
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resendIn, setResendIn] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
@@ -85,6 +94,16 @@ export default function AccountPage() {
       setUser(u);
       setAuthReady(true);
     });
+
+    // Pick up the result of a Google sign-in redirect, if we just came back
+    // from one. Any error here is surfaced the same way as a phone-auth error.
+    getRedirectResult(auth).catch((err: any) => {
+      // eslint-disable-next-line no-console
+      console.error("[GUCUT auth] google redirect failed:", err?.code, err?.message, err);
+      const msg = firebaseErrorToThai(err?.code ?? "");
+      if (msg) setError(msg);
+    });
+
     return () => unsub();
   }, []);
 
@@ -169,6 +188,23 @@ export default function AccountPage() {
     }
   }
 
+  async function handleGoogleLogin() {
+    setError(null);
+    setGoogleLoading(true);
+    try {
+      const auth = getFirebaseAuth();
+      const provider = new GoogleAuthProvider();
+      await signInWithRedirect(auth, provider);
+      // Browser navigates away here; no further code runs until redirect back.
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.error("[GUCUT auth] googleLogin failed:", err?.code, err?.message, err);
+      const msg = firebaseErrorToThai(err?.code ?? "");
+      if (msg) setError(msg);
+      setGoogleLoading(false);
+    }
+  }
+
   async function handleLogout() {
     const auth = getFirebaseAuth();
     await signOut(auth);
@@ -197,7 +233,7 @@ export default function AccountPage() {
   }
 
   return (
-    <div className="min-h-[70vh] px-4 pb-24 pt-6">
+    <div className="min-h-[70vh] px-4 pb-24 pt-8">
       {toast && (
         <div className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full bg-neutral-800 px-4 py-2 text-sm text-white shadow-lg">
           {toast}
@@ -206,52 +242,86 @@ export default function AccountPage() {
 
       {user ? (
         <LoggedInView
-          phoneDisplay={user.phoneNumber ? maskPhone(user.phoneNumber) : "-"}
+          phoneDisplay={
+            user.phoneNumber
+              ? maskPhone(user.phoneNumber)
+              : user.email || user.displayName || "-"
+          }
           onLogout={handleLogout}
           onComingSoon={comingSoon}
         />
       ) : (
         <div className="mx-auto max-w-sm">
-          <div className="mb-6 text-center">
-            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-orange-500/10 text-2xl">
-              👤
+          {/* big brand mark, Shopee/TikTok style */}
+          <div className="mb-8 flex flex-col items-center">
+            <div className="mb-3 flex h-20 w-20 items-center justify-center rounded-2xl bg-orange-500 text-3xl font-extrabold text-white shadow-lg shadow-orange-500/20">
+              G
             </div>
-            <h1 className="text-lg font-semibold text-white">
-              เข้าสู่ระบบ / สมัครสมาชิก
-            </h1>
+            <h1 className="text-xl font-bold text-white">GUCUT</h1>
             <p className="mt-1 text-sm text-neutral-400">
-              รับสิทธิพิเศษและติดตามคำสั่งซื้อของคุณ
+              เข้าสู่ระบบ / สมัครสมาชิก
             </p>
           </div>
 
           {step === "phone" ? (
             <form onSubmit={handleSendOtp} className="space-y-3">
-              <label className="block text-sm text-neutral-300">
-                เบอร์โทรศัพท์มือถือ
-              </label>
               <div className="flex overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900 focus-within:border-orange-500">
-                <span className="flex items-center border-r border-neutral-700 px-3 text-sm text-neutral-400">
-                  +66
+                <span className="flex items-center gap-1 border-r border-neutral-700 px-3 text-sm text-neutral-400">
+                  🇹🇭 +66
                 </span>
                 <input
                   type="tel"
                   inputMode="numeric"
                   autoComplete="tel"
-                  placeholder="0812345678"
+                  placeholder="หมายเลขโทรศัพท์"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   maxLength={10}
-                  className="w-full bg-transparent px-3 py-3 text-white placeholder-neutral-500 outline-none"
+                  className="w-full bg-transparent px-3 py-3.5 text-white placeholder-neutral-500 outline-none"
                 />
               </div>
               {error && <p className="text-sm text-red-400">{error}</p>}
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full rounded-xl bg-orange-500 py-3 font-medium text-white transition active:scale-[0.98] disabled:opacity-50"
+                className="w-full rounded-xl bg-orange-500 py-3.5 font-semibold text-white transition active:scale-[0.98] disabled:opacity-50"
               >
-                {loading ? "กำลังส่งรหัส..." : "ขอรหัส OTP"}
+                {loading ? "กำลังส่งรหัส..." : "ดำเนินการต่อ"}
               </button>
+
+              <div className="flex items-center gap-3 py-1">
+                <div className="h-px flex-1 bg-neutral-800" />
+                <span className="text-xs text-neutral-500">หรือ</span>
+                <div className="h-px flex-1 bg-neutral-800" />
+              </div>
+
+              <div className="overflow-hidden rounded-xl bg-neutral-900">
+                <SocialRow
+                  icon={<GoogleIcon />}
+                  label="ดำเนินการต่อด้วย Google"
+                  onClick={handleGoogleLogin}
+                  loading={googleLoading}
+                />
+                <SocialRow
+                  icon={<span className="text-lg">📘</span>}
+                  label="ดำเนินการต่อด้วย Facebook"
+                  onClick={comingSoon}
+                  bordered
+                />
+                <SocialRow
+                  icon={<span className="text-lg"></span>}
+                  label="ดำเนินการต่อด้วย Apple"
+                  onClick={comingSoon}
+                  bordered
+                />
+                <SocialRow
+                  icon={<span className="text-lg">💬</span>}
+                  label="ดำเนินการต่อด้วย LINE"
+                  onClick={comingSoon}
+                  bordered
+                />
+              </div>
+
               <p className="text-center text-xs text-neutral-500">
                 การเข้าสู่ระบบถือว่ายอมรับข้อตกลงการใช้งานของ GUCUT
               </p>
@@ -288,7 +358,7 @@ export default function AccountPage() {
                   onClick={handleChangeNumber}
                   className="text-neutral-400 underline-offset-2 hover:underline"
                 >
-                  เปลี่ยนเบอร์โทรศัෞท์
+                  เปลี่ยนเบอร์โทรศัพท์
                 </button>
                 {resendIn > 0 ? (
                   <span className="text-neutral-500">ส่งรหัสใหม่ได้ใน {resendIn}s</span>
@@ -317,6 +387,57 @@ export default function AccountPage() {
   );
 }
 
+function GoogleIcon() {
+  return (
+    <svg viewBox="0 0 48 48" className="h-[18px] w-[18px]">
+      <path
+        fill="#FFC107"
+        d="M43.6 20.5H42V20.4H24v7.2h11.3c-1.6 4.6-6 7.9-11.3 7.9-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.1-5.1C33.6 6.1 29 4.4 24 4.4 13.2 4.4 4.4 13.2 4.4 24S13.2 43.6 24 43.6 43.6 34.8 43.6 24c0-1.2-.1-2.4-.4-3.5z"
+      />
+      <path
+        fill="#FF3D00"
+        d="M6.3 14.7l6 4.4C13.9 15.6 18.6 12.4 24 12.4c3.1 0 5.9 1.2 8 3.1l5.1-5.1C33.6 6.1 29 4.4 24 4.4c-7.7 0-14.3 4.4-17.7 10.3z"
+      />
+      <path
+        fill="#4CAF50"
+        d="M24 43.6c4.9 0 9.4-1.9 12.7-4.9l-5.9-5c-1.9 1.4-4.4 2.3-6.8 2.3-5.3 0-9.7-3.3-11.3-7.9l-6 4.6C10 39 16.4 43.6 24 43.6z"
+      />
+      <path
+        fill="#1976D2"
+        d="M43.6 20.5H42V20.4H24v7.2h11.3c-.8 2.2-2.2 4.1-4 5.5l5.9 5c-.4.4 6.4-4.7 6.4-14.1 0-1.2-.1-2.4-.4-3.5z"
+      />
+    </svg>
+  );
+}
+
+function SocialRow({
+  icon,
+  label,
+  onClick,
+  bordered,
+  loading,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  bordered?: boolean;
+  loading?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={loading}
+      className={`flex w-full items-center gap-3 px-4 py-3.5 text-left text-sm text-white transition hover:bg-neutral-800 disabled:opacity-60 ${
+        bordered ? "border-t border-neutral-800" : ""
+      }`}
+    >
+      <span className="flex h-5 w-5 items-center justify-center">{icon}</span>
+      <span>{loading ? "กำลังเชื่อมต่อ..." : label}</span>
+    </button>
+  );
+}
+
 function LoggedInView({
   phoneDisplay,
   onLogout,
@@ -341,7 +462,7 @@ function LoggedInView({
         </div>
         <div>
           <p className="text-base font-semibold text-white">{phoneDisplay}</p>
-          <p className="text-sm text-neutral-400">สัตชิก GUCUT</p>
+          <p className="text-sm text-neutral-400">สมาชิก GUCUT</p>
         </div>
       </div>
 
