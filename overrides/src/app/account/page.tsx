@@ -9,6 +9,7 @@ import {
   getRedirectResult,
   GoogleAuthProvider,
   FacebookAuthProvider,
+  OAuthProvider,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
@@ -96,6 +97,7 @@ export default function AccountPage() {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [facebookLoading, setFacebookLoading] = useState(false);
+  const [lineLoading, setLineLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resendIn, setResendIn] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
@@ -290,6 +292,46 @@ export default function AccountPage() {
     }
   }
 
+  async function handleLineLogin() {
+    setError(null);
+    setLineLoading(true);
+    try {
+      // Same Safari/iOS ITP issue as Google/Facebook above — use a popup
+      // first, falling back to a full-page redirect only if the popup is
+      // blocked.
+      const auth = getFirebaseAuth();
+      const provider = new OAuthProvider("oidc.line");
+      await signInWithPopup(auth, provider);
+      setToast("เข้าสู่ระบบสำเร็จ");
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.error("[GUCUT auth] lineLogin failed:", err?.code, err?.message, err);
+      if (
+        err?.code === "auth/popup-blocked" ||
+        err?.code === "auth/operation-not-supported-in-this-environment"
+      ) {
+        try {
+          const auth = getFirebaseAuth();
+          const provider = new OAuthProvider("oidc.line");
+          await signInWithRedirect(auth, provider);
+          return;
+        } catch (err2: any) {
+          // eslint-disable-next-line no-console
+          console.error(
+            "[GUCUT auth] lineLogin redirect fallback failed:",
+            err2?.code,
+            err2?.message,
+            err2
+          );
+        }
+      }
+      const msg = firebaseErrorToThai(err?.code ?? "");
+      if (msg) setError(msg);
+    } finally {
+      setLineLoading(false);
+    }
+  }
+
   async function handleEmailSubmit(e?: React.FormEvent) {
     e?.preventDefault();
     setError(null);
@@ -453,7 +495,8 @@ export default function AccountPage() {
                 <SocialRow
                   icon={<span className="text-lg">💬</span>}
                   label="ดำเนินการต่อด้วย LINE"
-                  onClick={comingSoon}
+                  onClick={handleLineLogin}
+                  loading={lineLoading}
                   bordered
                 />
               </div>
