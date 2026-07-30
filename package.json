@@ -10,6 +10,7 @@
     "vercel-build": "tar -xzf bundle.tgz && cp -r overrides/. . && next build"
   },
   "dependencies": {
+    "firebase": "^11.0.0",
     "next": "15.5.20",
     "qrcode": "^1.5.4",
     "react": "19.1.0",
