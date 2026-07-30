@@ -7,6 +7,8 @@ import {
   signInWithRedirect,
   getRedirectResult,
   GoogleAuthProvider,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
   type ConfirmationResult,
@@ -62,6 +64,15 @@ function firebaseErrorToThai(code: string): string {
     case "auth/popup-closed-by-user":
     case "auth/cancelled-popup-request":
       return "";
+    case "auth/invalid-email":
+      return "รูปแบบอีเมลไม่ถูกต้อง";
+    case "auth/wrong-password":
+    case "auth/invalid-credential":
+      return "อีเมลหรือรหัสผ่านไม่ถูกต้อง";
+    case "auth/weak-password":
+      return "รหัสผ่านสั้นเกินไป กรุณาใช้อย่างน้อย 6 ตัวอักษร";
+    case "auth/email-already-in-use":
+      return "อีเมลนี้ถูกใช้งานแล้ว กรุณาตรวจสอบรหัสผ่านอีกครั้ง";
     default:
       return "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง";
   }
@@ -69,7 +80,7 @@ function firebaseErrorToThai(code: string): string {
 
 const RESEND_SECONDS = 60;
 
-type Step = "phone" | "otp";
+type Step = "phone" | "otp" | "email";
 
 export default function AccountPage() {
   const [authReady, setAuthReady] = useState(false);
@@ -78,6 +89,8 @@ export default function AccountPage() {
   const [step, setStep] = useState<Step>("phone");
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -205,6 +218,47 @@ export default function AccountPage() {
     }
   }
 
+  async function handleEmailSubmit(e?: React.FormEvent) {
+    e?.preventDefault();
+    setError(null);
+    if (!email.trim() || !email.includes("@")) {
+      setError("กรุณากรอกอีเมลให้ถูกต้อง");
+      return;
+    }
+    if (password.length < 6) {
+      setError("รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร");
+      return;
+    }
+    setLoading(true);
+    try {
+      const auth = getFirebaseAuth();
+      try {
+        await signInWithEmailAndPassword(auth, email.trim(), password);
+      } catch (signInErr: any) {
+        // Account doesn't exist yet — treat this as a combined sign-in/sign-up
+        // flow, same as the phone+OTP path above.
+        if (
+          signInErr?.code === "auth/user-not-found" ||
+          signInErr?.code === "auth/invalid-credential"
+        ) {
+          await createUserWithEmailAndPassword(auth, email.trim(), password);
+        } else {
+          throw signInErr;
+        }
+      }
+      setToast("เข้าสู่ระบบสำเร็จ");
+      setStep("phone");
+      setEmail("");
+      setPassword("");
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.error("[GUCUT auth] emailLogin failed:", err?.code, err?.message, err);
+      setError(firebaseErrorToThai(err?.code ?? ""));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleLogout() {
     const auth = getFirebaseAuth();
     await signOut(auth);
@@ -297,10 +351,12 @@ export default function AccountPage() {
 
               <div className="overflow-hidden rounded-xl bg-neutral-900">
                 <SocialRow
-                  icon={<GoogleIcon />}
-                  label="ดำเนินการต่อด้วย Google"
-                  onClick={handleGoogleLogin}
-                  loading={googleLoading}
+                  icon={<span className="text-lg">✉️</span>}
+                  label="ดำเนินการต่อด้วยอีเมล"
+                  onClick={() => {
+                    setError(null);
+                    setStep("email");
+                  }}
                 />
                 <SocialRow
                   icon={<span className="text-lg">📘</span>}
@@ -315,6 +371,13 @@ export default function AccountPage() {
                   bordered
                 />
                 <SocialRow
+                  icon={<GoogleIcon />}
+                  label="ดำเนินการต่อด้วย Google"
+                  onClick={handleGoogleLogin}
+                  loading={googleLoading}
+                  bordered
+                />
+                <SocialRow
                   icon={<span className="text-lg">💬</span>}
                   label="ดำเนินการต่อด้วย LINE"
                   onClick={comingSoon}
@@ -325,6 +388,47 @@ export default function AccountPage() {
               <p className="text-center text-xs text-neutral-500">
                 การเข้าสู่ระบบถือว่ายอมรับข้อตกลงการใช้งานของ GUCUT
               </p>
+            </form>
+          ) : step === "email" ? (
+            <form onSubmit={handleEmailSubmit} className="space-y-3">
+              <input
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                placeholder="อีเมล"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-3.5 text-white placeholder-neutral-500 outline-none focus:border-orange-500"
+              />
+              <input
+                type="password"
+                autoComplete="current-password"
+                placeholder="รหัสผ่าน"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-3.5 text-white placeholder-neutral-500 outline-none focus:border-orange-500"
+              />
+              {error && <p className="text-sm text-red-400">{error}</p>}
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full rounded-xl bg-orange-500 py-3.5 font-semibold text-white transition active:scale-[0.98] disabled:opacity-50"
+              >
+                {loading ? "กำลังดำเนินการ..." : "ดำเนินการต่อ"}
+              </button>
+              <p className="text-center text-xs text-neutral-500">
+                หากยังไม่มีบัญชี ระบบจะสมัครสมาชิกให้อัตโนมัติ
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setStep("phone");
+                  setError(null);
+                }}
+                className="w-full text-center text-sm text-neutral-400 hover:underline"
+              >
+                ← กลับ
+              </button>
             </form>
           ) : (
             <form onSubmit={handleVerifyOtp} className="space-y-3">
