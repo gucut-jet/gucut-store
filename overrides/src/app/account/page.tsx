@@ -5,6 +5,7 @@ import {
   RecaptchaVerifier,
   signInWithPhoneNumber,
   signInWithRedirect,
+  signInWithPopup,
   getRedirectResult,
   GoogleAuthProvider,
   FacebookAuthProvider,
@@ -225,15 +226,42 @@ export default function AccountPage() {
     setError(null);
     setFacebookLoading(true);
     try {
+      // Popup (not redirect) avoids a known Safari/iOS issue where the
+      // pending-auth state doesn't survive the full-page round trip through
+      // firebaseapp.com (Intelligent Tracking Prevention wipes the session
+      // storage Firebase needs), which made the login silently bounce back
+      // to this page without ever signing the user in.
       const auth = getFirebaseAuth();
       const provider = new FacebookAuthProvider();
-      await signInWithRedirect(auth, provider);
-      // Browser navigates away here; no further code runs until redirect back.
+      await signInWithPopup(auth, provider);
+      setToast("เข้าสู่ระบบสำเร็จ");
     } catch (err: any) {
       // eslint-disable-next-line no-console
       console.error("[GUCUT auth] facebookLogin failed:", err?.code, err?.message, err);
+      // Some in-app/older browsers block popups outright — fall back to a
+      // full-page redirect rather than leaving the user stuck.
+      if (
+        err?.code === "auth/popup-blocked" ||
+        err?.code === "auth/operation-not-supported-in-this-environment"
+      ) {
+        try {
+          const auth = getFirebaseAuth();
+          const provider = new FacebookAuthProvider();
+          await signInWithRedirect(auth, provider);
+          return;
+        } catch (err2: any) {
+          // eslint-disable-next-line no-console
+          console.error(
+            "[GUCUT auth] facebookLogin redirect fallback failed:",
+            err2?.code,
+            err2?.message,
+            err2
+          );
+        }
+      }
       const msg = firebaseErrorToThai(err?.code ?? "");
       if (msg) setError(msg);
+    } finally {
       setFacebookLoading(false);
     }
   }
