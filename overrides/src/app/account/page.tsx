@@ -209,15 +209,39 @@ export default function AccountPage() {
     setError(null);
     setGoogleLoading(true);
     try {
+      // Popup (not redirect) avoids the same Safari/iOS ITP issue as the
+      // Facebook login below: the full-page round trip through
+      // firebaseapp.com doesn't reliably survive Safari's tracking
+      // prevention, which silently bounced the user back unauthenticated.
       const auth = getFirebaseAuth();
       const provider = new GoogleAuthProvider();
-      await signInWithRedirect(auth, provider);
-      // Browser navigates away here; no further code runs until redirect back.
+      await signInWithPopup(auth, provider);
+      setToast("เข้าสู่ระบบสำเร็จ");
     } catch (err: any) {
       // eslint-disable-next-line no-console
       console.error("[GUCUT auth] googleLogin failed:", err?.code, err?.message, err);
+      if (
+        err?.code === "auth/popup-blocked" ||
+        err?.code === "auth/operation-not-supported-in-this-environment"
+      ) {
+        try {
+          const auth = getFirebaseAuth();
+          const provider = new GoogleAuthProvider();
+          await signInWithRedirect(auth, provider);
+          return;
+        } catch (err2: any) {
+          // eslint-disable-next-line no-console
+          console.error(
+            "[GUCUT auth] googleLogin redirect fallback failed:",
+            err2?.code,
+            err2?.message,
+            err2
+          );
+        }
+      }
       const msg = firebaseErrorToThai(err?.code ?? "");
       if (msg) setError(msg);
+    } finally {
       setGoogleLoading(false);
     }
   }
