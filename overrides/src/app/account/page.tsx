@@ -7,6 +7,7 @@ import {
   signInWithRedirect,
   getRedirectResult,
   GoogleAuthProvider,
+  FacebookAuthProvider,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
@@ -93,6 +94,7 @@ export default function AccountPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [facebookLoading, setFacebookLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resendIn, setResendIn] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
@@ -108,11 +110,12 @@ export default function AccountPage() {
       setAuthReady(true);
     });
 
-    // Pick up the result of a Google sign-in redirect, if we just came back
-    // from one. Any error here is surfaced the same way as a phone-auth error.
+    // Pick up the result of a Google/Facebook sign-in redirect, if we just
+    // came back from one. Any error here is surfaced the same way as a
+    // phone-auth error.
     getRedirectResult(auth).catch((err: any) => {
       // eslint-disable-next-line no-console
-      console.error("[GUCUT auth] google redirect failed:", err?.code, err?.message, err);
+      console.error("[GUCUT auth] redirect login failed:", err?.code, err?.message, err);
       const msg = firebaseErrorToThai(err?.code ?? "");
       if (msg) setError(msg);
     });
@@ -215,6 +218,23 @@ export default function AccountPage() {
       const msg = firebaseErrorToThai(err?.code ?? "");
       if (msg) setError(msg);
       setGoogleLoading(false);
+    }
+  }
+
+  async function handleFacebookLogin() {
+    setError(null);
+    setFacebookLoading(true);
+    try {
+      const auth = getFirebaseAuth();
+      const provider = new FacebookAuthProvider();
+      await signInWithRedirect(auth, provider);
+      // Browser navigates away here; no further code runs until redirect back.
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.error("[GUCUT auth] facebookLogin failed:", err?.code, err?.message, err);
+      const msg = firebaseErrorToThai(err?.code ?? "");
+      if (msg) setError(msg);
+      setFacebookLoading(false);
     }
   }
 
@@ -361,7 +381,8 @@ export default function AccountPage() {
                 <SocialRow
                   icon={<span className="text-lg">📘</span>}
                   label="ดำเนินการต่อด้วย Facebook"
-                  onClick={comingSoon}
+                  onClick={handleFacebookLogin}
+                  loading={facebookLoading}
                   bordered
                 />
                 <SocialRow
