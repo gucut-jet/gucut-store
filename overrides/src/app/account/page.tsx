@@ -1,0 +1,367 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import {
+  RecaptchaVerifier,
+  signInWithPhoneNumber,
+  signOut,
+  onAuthStateChanged,
+  type ConfirmationResult,
+  type User,
+} from "firebase/auth";
+import { getFirebaseAuth } from "../../lib/firebase";
+
+// ---- helpers -------------------------------------------------
+
+/** Convert a Thai local mobile number (08x-xxx-xxxx) to E.164 (+668xxxxxxxx). */
+function toE164Thai(raw: string): string | null {
+  const digits = raw.replace(/[^0-9]/g, "");
+  if (digits.length === 10 && digits.startsWith("0")) {
+    return "+66" + digits.slice(1);
+  }
+  if (digits.length === 9) {
+    return "+66" + digits;
+  }
+  if (raw.trim().startsWith("+66") && digits.length >= 11) {
+    return "+" + digits.replace(/^0+/, "");
+  }
+  return null;
+}
+
+function maskPhone(e164: string): string {
+  // +66812345678 -> 081-234-5678
+  const digits = e164.replace("+66", "0");
+  if (digits.length !== 10) return e164;
+  return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+}
+
+function firebaseErrorToThai(code: string): string {
+  switch (code) {
+    case "auth/invalid-phone-number":
+      return "เบอร์โทรศัพท์ไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง";
+    case "auth/missing-phone-number":
+      return "กรุณากรอกเบอร์โทรศัพท์";
+    case "auth/quota-exceeded":
+    case "auth/too-many-requests":
+      return "มีการขอรหัสมากเกินไป กรุณาลองใหม่ภายหลัง";
+    case "auth/invalid-verification-code":
+      return "รหัส OTP ไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง";
+    case "auth/code-expired":
+      return "รหัส OTP หมดอายุ กรุณาขอรหัสใหม่";
+    case "auth/user-disabled":
+      return "บัญชีนี้ถูกระงับการใช้งาน";
+    case "auth/network-request-failed":
+      return "การเชื่อมต่อขัด้อง กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่";
+    case "auth/captcha-check-failed":
+      return "ตรวจสอบยืนยันตัวตนไม่สำเร็จ กรุณาลองใหม่อีกครั้ง";
+    default:
+      return "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง";
+  }
+}
+
+const RESEND_SECONDS = 60;
+
+type Step = "phone" | "otp";
+
+export default function AccountPage() {
+  const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+
+  const [step, setStep] = useState<Step>("phone");
+  const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [resendIn, setResendIn] = useState(0);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const confirmationRef = useRef<ConfirmationResult | null>(null);
+  const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
+  const e164Ref = useRef<string>("");
+
+  useEffect(() => {
+    const auth = getFirebaseAuth();
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthReady(true);
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = setTimeout(() => setResendIn((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendIn]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  function ensureRecaptcha(): RecaptchaVerifier {
+    const auth = getFirebaseAuth();
+    if (!recaptchaRef.current) {
+      recaptchaRef.current = new RecaptchaVerifier(auth, "recaptcha-container", {
+        size: "invisible",
+      });
+    }
+    return recaptchaRef.current;
+  }
+
+  async function handleSendOtp(e?: React.FormEvent) {
+    e?.preventDefault();
+    setError(null);
+    const e164 = toE164Thai(phone);
+    if (!e164) {
+      setError("กรุณากรอกเบอร์โทรศัพท์มือถือให้ถูกต้อง (10 หลัก)");
+      return;
+    }
+    setLoading(true);
+    try {
+      const auth = getFirebaseAuth();
+      const verifier = ensureRecaptcha();
+      const result = await signInWithPhoneNumber(auth, e164, verifier);
+      confirmationRef.current = result;
+      e164Ref.current = e164;
+      setStep("otp");
+      setResendIn(RESEND_SECONDS);
+    } catch (err: any) {
+      setError(firebaseErrorToThai(err?.code ?? ""));
+      // reset recaptcha widget so the user can retry
+      try {
+        recaptchaRef.current?.clear();
+      } catch {}
+      recaptchaRef.current = null;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleVerifyOtp(e?: React.FormEvent) {
+    e?.preventDefault();
+    setError(null);
+    if (otp.trim().length < 6) {
+      setError("กรุณากรอกรหัส OTP ให้ครบ 6 หลัก");
+      return;
+    }
+    if (!confirmationRef.current) {
+      setError("เซสชันหมดอายุ กรุณาขอรหัส OTP ใหม่");
+      setStep("phone");
+      return;
+    }
+    setLoading(true);
+    try {
+      await confirmationRef.current.confirm(otp.trim());
+      setToast("เข้าสู่ระบบสำเร็จ");
+      setStep("phone");
+      setPhone("");
+      setOtp("");
+    } catch (err: any) {
+      setError(firebaseErrorToThai(err?.code ?? ""));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    const auth = getFirebaseAuth();
+    await signOut(auth);
+    setToast("ออกจากระบบแล้ว");
+  }
+
+  function handleChangeNumber() {
+    setStep("phone");
+    setOtp("");
+    setError(null);
+    confirmationRef.current = null;
+  }
+
+  function comingSoon() {
+    setToast("ฟีเจอร์นี้จะเปิดให้ใช้งานเร็วๆ นี้");
+  }
+
+  // ---- render -------------------------------------------------
+
+  if (!authReady) {
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-neutral-700 border-t-orange-500" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-[70vh] px-4 pb-24 pt-6">
+      {toast && (
+        <div className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full bg-neutral-800 px-4 py-2 text-sm text-white shadow-lg">
+          {toast}
+        </div>
+      )}
+
+      {user ? (
+        <LoggedInView
+          phoneDisplay={user.phoneNumber ? maskPhone(user.phoneNumber) : "-"}
+          onLogout={handleLogout}
+          onComingSoon={comingSoon}
+        />
+      ) : (
+        <div className="mx-auto max-w-sm">
+          <div className="mb-6 text-center">
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-orange-500/10 text-2xl">
+              👤
+            </div>
+            <h1 className="text-lg font-semibold text-white">
+              เข้าสู่ระบบ / สมัครสมาชิก
+            </h1>
+            <p className="mt-1 text-sm text-neutral-400">
+              รับสิทธิพิเศษและติดตามคำสั่งซื้อของคุณ
+            </p>
+          </div>
+
+          {step === "phone" ? (
+            <form onSubmit={handleSendOtp} className="space-y-3">
+              <label className="block text-sm text-neutral-300">
+                เบอร์โทรศัพท์มือถือ
+              </label>
+              <div className="flex overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900 focus-within:border-orange-500">
+                <span className="flex items-center border-r border-neutral-700 px-3 text-sm text-neutral-400">
+                  +66
+                </span>
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  placeholder="0812345678"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  maxLength={10}
+                  className="w-full bg-transparent px-3 py-3 text-white placeholder-neutral-500 outline-none"
+                />
+              </div>
+              {error && <p className="text-sm text-red-400">{error}</p>}
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full rounded-xl bg-orange-500 py-3 font-medium text-white transition active:scale-[0.98] disabled:opacity-50"
+              >
+                {loading ? "กำลังส่งรหัส..." : "ขอรหัส OTP"}
+              </button>
+              <p className="text-center text-xs text-neutral-500">
+                การเข้าสู่ระบบถือว่ายอมรับข้อตกลงการใช้งานของ GUCUT
+              </p>
+            </form>
+          ) : (
+            <form onSubmit={handleVerifyOtp} className="space-y-3">
+              <p className="text-sm text-neutral-300">
+                กรอกรหัส OTP ที่ส่งไปที่{" "}
+                <span className="font-medium text-white">
+                  {maskPhone(e164Ref.current)}
+                </span>
+              </p>
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="- - - - - -"
+                value={otp}
+                onChange={(e) => setOtp(e.target.value.replace(/[^0-9]/g, ""))}
+                maxLength={6}
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-3 text-center text-2xl tracking-[0.5em] text-white placeholder-neutral-600 outline-none focus:border-orange-500"
+              />
+              {error && <p className="text-sm text-red-400">{error}</p>}
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full rounded-xl bg-orange-500 py-3 font-medium text-white transition active:scale-[0.98] disabled:opacity-50"
+              >
+                {loading ? "กำลังตรวจสอบ..." : "ยืนยันรหัส OTP"}
+              </button>
+              <div className="flex items-center justify-between text-sm">
+                <button
+                  type="button"
+                  onClick={handleChangeNumber}
+                  className="text-neutral-400 underline-offset-2 hover:underline"
+                >
+                  เปลี่ยนเบอร์โทรศัෞท์
+                </button>
+                {resendIn > 0 ? (
+                  <span className="text-neutral-500">ส่งรหัสใหม่ได้ใน {resendIn}s</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleSendOtp()}
+                    disabled={loading}
+                    className="text-orange-400 hover:underline"
+                  >
+                    ส่งรหัสอีกครั้ง
+                  </button>
+                )}
+              </div>
+            </form>
+          )}
+        </div>
+      )}
+
+      {/* invisible reCAPTCHA anchor required by Firebase phone auth */}
+      <div id="recaptcha-container" />
+    </div>
+  );
+}
+
+function LoggedInView({
+  phoneDisplay,
+  onLogout,
+  onComingSoon,
+}: {
+  phoneDisplay: string;
+  onLogout: () => void;
+  onComingSoon: () => void;
+}) {
+  const menuItems: Array<{ icon: string; label: string }> = [
+    { icon: "📦", label: "รายการสั่งซื้อของฉัน" },
+    { icon: "📍", label: "ที่อยู่จัดส่ง" },
+    { icon: "🎟️", label: "คูปองส่วนลด" },
+    { icon: "❤️", label: "สินค้าที่ถูกใจ" },
+  ];
+
+  return (
+    <div className="mx-auto max-w-sm">
+      <div className="mb-4 flex items-center gap-4 rounded-2xl bg-neutral-900 p-4">
+        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-orange-500/20 text-2xl">
+          👤
+        </div>
+        <div>
+          <p className="text-base font-semibold text-white">{phoneDisplay}</p>
+          <p className="text-sm text-neutral-400">สมาชิก GUCUT</p>
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl bg-neutral-900">
+        {menuItems.map((item, i) => (
+          <button
+            key={item.label}
+            onClick={onComingSoon}
+            className={`flex w-full items-center justify-between px-4 py-3.5 text-left text-white transition hover:bg-neutral-800 ${
+              i !== menuItems.length - 1 ? "border-b border-neutral-800" : ""
+            }`}
+          >
+            <span className="flex items-center gap-3">
+              <span>{item.icon}</span>
+              <span className="text-sm">{item.label}</span>
+            </span>
+            <span className="text-neutral-600">›</span>
+          </button>
+        ))}
+      </div>
+
+      <button
+        onClick={onLogout}
+        className="mt-4 w-full rounded-xl border border-neutral-700 py-3 text-sm font-medium text-red-400 transition hover:bg-neutral-900"
+      >
+        ออกจากระบบ
+      </button>
+    </div>
+  );
+}
