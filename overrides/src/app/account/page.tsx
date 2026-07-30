@@ -128,6 +128,8 @@ export default function AccountPage() {
       setStep("otp");
       setResendIn(RESEND_SECONDS);
     } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.error("[GUCUT auth] sendOtp failed:", err?.code, err?.message, err);
       setError(firebaseErrorToThai(err?.code ?? ""));
       // reset recaptcha widget so the user can retry
       try {
@@ -159,6 +161,8 @@ export default function AccountPage() {
       setPhone("");
       setOtp("");
     } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.error("[GUCUT auth] verifyOtp failed:", err?.code, err?.message, err);
       setError(firebaseErrorToThai(err?.code ?? ""));
     } finally {
       setLoading(false);
@@ -304,7 +308,10 @@ export default function AccountPage() {
         </div>
       )}
 
-      {/* invisible reCAPTCHA anchor required by Firebase phone auth */}
+      {/* invisible reCAPTCHA anchor required by Firebase phone auth.
+          Google's badge is fixed bottom-right by default, which collides
+          with our fixed bottom nav bar — push it up above the nav. */}
+      <style>{`.grecaptcha-badge { bottom: 84px !important; z-index: 40; }`}</style>
       <div id="recaptcha-container" />
     </div>
   );
@@ -334,7 +341,7 @@ function LoggedInView({
         </div>
         <div>
           <p className="text-base font-semibold text-white">{phoneDisplay}</p>
-          <p className="text-sm text-neutral-400">สมาชิก GUCUT</p>
+          <p className="text-sm text-neutral-400">สัตชิก GUCUT</p>
         </div>
       </div>
 
